@@ -1,0 +1,494 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  doc, 
+  setDoc 
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously 
+} from 'firebase/auth';
+import { 
+  User, 
+  GraduationCap, 
+  ClipboardCheck, 
+  LogOut, 
+  ShieldCheck, 
+  ChevronRight, 
+  ChevronLeft,
+  Timer,
+  CheckCircle2
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'english-exam-v1';
+
+// --- Exam Data ---
+const QUESTIONS = [
+  {
+    id: 1,
+    text: "Why do Andre and Monita want to go back to their class?",
+    options: ["Because they are hungry", "Because they are full after having lunch", "Because the bell is ringing", "Because they have a test"],
+    correct: 1
+  },
+  {
+    id: 2,
+    text: "What does Andre remind Monita to do before leaving?",
+    options: ["To buy more snacks", "To wash their hands", "To put their trash in the trash can", "To clean the table"],
+    correct: 2
+  },
+  {
+    id: 3,
+    text: "Monita says: 'I can't eat another bite.' This means...",
+    options: ["She is still hungry", "She is extremely full", "She doesn't like the food", "She wants to buy more snacks"],
+    correct: 1
+  },
+  {
+    id: 4,
+    text: "Andre said, 'Oh no, the trash can is full.' What CAN they do to solve the messy situation?",
+    options: ["They can leave it as it is", "They can find another trash can or report it", "They can throw trash on the floor", "They can't do anything"],
+    correct: 1
+  },
+  {
+    id: 5,
+    text: "Monita: 'We _____ reduce the use of plastic from now on.'",
+    options: ["can", "should", "cannot", "will not"],
+    correct: 1
+  },
+  {
+    id: 6,
+    text: "What is the condition of the trash can at the canteen?",
+    options: ["It is empty and clean", "It is broken", "It is missing", "It is full already and the trash is everywhere"],
+    correct: 3
+  },
+  {
+    id: 7,
+    text: "What kind of waste makes the trash bin full?",
+    options: ["Paper and books", "Plastic waste from snack wrappers and straws", "Leftover food and rice", "Leaves and branches"],
+    correct: 1
+  },
+  {
+    id: 8,
+    text: "Galang can show how to wash hands. What is the very first step?",
+    options: ["Apply the hand soap", "Turn on the faucet and wash hands with running water", "Dry hands with a towel", "Rub hands together"],
+    correct: 1
+  },
+  {
+    id: 9,
+    text: "In the context of 'Ability', if Andre says 'I can wash my hands properly', it means...",
+    options: ["He doesn't know how to wash hands", "He is willing to wash hands", "He has the skill to wash hands correctly", "He is afraid of water"],
+    correct: 2
+  },
+  {
+    id: 10,
+    text: "Pipit: 'I ____ clean between my fingers properly.' (Ability statement)",
+    options: ["can", "cannot", "could not", "am not"],
+    correct: 0
+  }
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null); // 'student' or 'teacher'
+  const [loginData, setLoginData] = useState({ name: '', class: '', accessCode: '' });
+  const [currentStep, setCurrentStep] = useState('landing'); // landing, student-login, teacher-login, exam, results, dashboard
+  const [examState, setExamState] = useState({
+    currentQuestion: 0,
+    answers: {},
+    isFinished: false,
+    startTime: null,
+    score: 0
+  });
+  const [submissions, setSubmissions] = useState([]);
+
+  // --- Auth Effect ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+  }, []);
+
+  // --- Real-time Data for Teacher ---
+  useEffect(() => {
+    if (role === 'teacher' && currentStep === 'dashboard') {
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setSubmissions(data);
+      }, (err) => console.error("Firestore error:", err));
+      return () => unsubscribe();
+    }
+  }, [role, currentStep]);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (role === 'teacher') {
+      if (loginData.accessCode.toUpperCase() === 'FLO') {
+        setCurrentStep('dashboard');
+      } else {
+        alert("Kode akses salah!");
+      }
+    } else {
+      if (loginData.name && loginData.class) {
+        setExamState({ ...examState, startTime: new Date().toISOString() });
+        setCurrentStep('exam');
+      } else {
+        alert("Harap isi nama dan kelas!");
+      }
+    }
+  };
+
+  const submitExam = async () => {
+    let score = 0;
+    QUESTIONS.forEach((q, idx) => {
+      if (examState.answers[idx] === q.correct) score += 10;
+    });
+
+    const result = {
+      name: loginData.name,
+      class: loginData.class,
+      score: score,
+      submittedAt: new Date().toISOString(),
+      answers: examState.answers
+    };
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), result);
+      setExamState({ ...examState, score, isFinished: true });
+      setCurrentStep('results');
+    } catch (err) {
+      console.error("Submit error:", err);
+      alert("Gagal mengirim jawaban. Silakan coba lagi.");
+    }
+  };
+
+  // --- UI Components ---
+
+  if (currentStep === 'landing') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
+          <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <GraduationCap className="w-10 h-10 text-blue-600" />
+          </div>
+          <h1 className="text-3xl font-bold text-slate-800 mb-2">CBT English Exam</h1>
+          <p className="text-slate-500 mb-8">Selamat datang di sistem ujian interaktif Unit 1 Bab 3.</p>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <button 
+              onClick={() => { setRole('student'); setCurrentStep('student-login'); }}
+              className="flex flex-col items-center p-6 bg-blue-50 hover:bg-blue-100 rounded-xl transition-all border-2 border-transparent hover:border-blue-200 group"
+            >
+              <User className="w-8 h-8 text-blue-600 mb-2 group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-blue-800">Siswa</span>
+            </button>
+            <button 
+              onClick={() => { setRole('teacher'); setCurrentStep('teacher-login'); }}
+              className="flex flex-col items-center p-6 bg-slate-50 hover:bg-slate-100 rounded-xl transition-all border-2 border-transparent hover:border-slate-200 group"
+            >
+              <ShieldCheck className="w-8 h-8 text-slate-600 mb-2 group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-slate-800">Guru</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentStep === 'student-login' || currentStep === 'teacher-login') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+          <button onClick={() => setCurrentStep('landing')} className="text-slate-400 hover:text-slate-600 mb-6 flex items-center gap-1">
+            <ChevronLeft size={20} /> Kembali
+          </button>
+          <h2 className="text-2xl font-bold text-slate-800 mb-6">
+            Login {role === 'student' ? 'Peserta Ujian' : 'Akses Guru'}
+          </h2>
+          <form onSubmit={handleLogin} className="space-y-4">
+            {role === 'student' ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Nama Lengkap</label>
+                  <input 
+                    required
+                    type="text" 
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    value={loginData.name}
+                    onChange={e => setLoginData({...loginData, name: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Kelas</label>
+                  <input 
+                    required
+                    type="text" 
+                    placeholder="Contoh: 7A"
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    value={loginData.class}
+                    onChange={e => setLoginData({...loginData, class: e.target.value})}
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Kode Akses Guru</label>
+                <input 
+                  required
+                  type="password" 
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-slate-500 outline-none"
+                  value={loginData.accessCode}
+                  onChange={e => setLoginData({...loginData, accessCode: e.target.value})}
+                />
+                <p className="text-xs text-slate-400 mt-2 italic">Petunjuk: Kode adalah FLO</p>
+              </div>
+            )}
+            <button className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition-colors">
+              Masuk
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentStep === 'exam') {
+    const q = QUESTIONS[examState.currentQuestion];
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col">
+        {/* Header */}
+        <header className="bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-10">
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-600 text-white p-2 rounded-lg"><ClipboardCheck size={20}/></div>
+            <div>
+              <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">CBT Bahasa Inggris</p>
+              <p className="font-bold text-slate-800">{loginData.name} - {loginData.class}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 bg-slate-100 px-4 py-2 rounded-full font-mono font-bold text-blue-700">
+            <Timer size={18} />
+            <span>EXAM IN PROGRESS</span>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-5xl w-full mx-auto p-4 md:p-8 flex flex-col md:flex-row gap-8">
+          {/* Question Area */}
+          <div className="flex-1 bg-white rounded-2xl shadow-sm p-6 md:p-8 border border-slate-200">
+            <div className="flex justify-between items-center mb-6">
+              <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-bold">
+                SOAL NOMOR {q.id}
+              </span>
+            </div>
+            <h3 className="text-xl text-slate-800 font-medium leading-relaxed mb-8">
+              {q.text}
+            </h3>
+            <div className="space-y-3">
+              {q.options.map((opt, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setExamState({
+                    ...examState, 
+                    answers: { ...examState.answers, [examState.currentQuestion]: idx }
+                  })}
+                  className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4 ${
+                    examState.answers[examState.currentQuestion] === idx 
+                    ? 'border-blue-600 bg-blue-50 text-blue-700' 
+                    : 'border-slate-100 hover:border-slate-200 text-slate-600'
+                  }`}
+                >
+                  <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold border-2 ${
+                    examState.answers[examState.currentQuestion] === idx ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'
+                  }`}>
+                    {String.fromCharCode(65 + idx)}
+                  </span>
+                  <span className="text-lg">{opt}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Navigation Sidebar */}
+          <div className="w-full md:w-72 space-y-4">
+            <div className="bg-white rounded-2xl shadow-sm p-4 border border-slate-200">
+              <h4 className="font-bold text-slate-800 mb-4 border-b pb-2">Navigasi Soal</h4>
+              <div className="grid grid-cols-5 gap-2">
+                {QUESTIONS.map((_, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setExamState({...examState, currentQuestion: idx})}
+                    className={`h-10 rounded-lg font-bold flex items-center justify-center transition-all ${
+                      examState.currentQuestion === idx ? 'ring-2 ring-blue-600 ring-offset-2' : ''
+                    } ${
+                      examState.answers[idx] !== undefined ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-6 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Terjawab:</span>
+                  <span className="font-bold text-slate-800">{Object.keys(examState.answers).length} / {QUESTIONS.length}</span>
+                </div>
+                {Object.keys(examState.answers).length === QUESTIONS.length && (
+                  <button 
+                    onClick={submitExam}
+                    className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold mt-4 shadow-lg shadow-green-100 transition-all active:scale-95"
+                  >
+                    Selesaikan Ujian
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </main>
+
+        {/* Footer Nav */}
+        <footer className="bg-white border-t p-4 flex justify-between items-center sticky bottom-0">
+          <button 
+            disabled={examState.currentQuestion === 0}
+            onClick={() => setExamState({...examState, currentQuestion: Math.max(0, examState.currentQuestion - 1)})}
+            className="flex items-center gap-2 px-6 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg text-slate-600 font-bold transition-all"
+          >
+            <ChevronLeft size={20}/> Sebelumnya
+          </button>
+          <button 
+            disabled={examState.currentQuestion === QUESTIONS.length - 1}
+            onClick={() => setExamState({...examState, currentQuestion: Math.min(QUESTIONS.length - 1, examState.currentQuestion + 1)})}
+            className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg text-white font-bold transition-all"
+          >
+            Selanjutnya <ChevronRight size={20}/>
+          </button>
+        </footer>
+      </div>
+    );
+  }
+
+  if (currentStep === 'results') {
+    return (
+      <div className="min-h-screen bg-blue-600 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 text-center animate-in zoom-in duration-500">
+          <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <CheckCircle2 className="w-12 h-12 text-green-600" />
+          </div>
+          <h2 className="text-3xl font-extrabold text-slate-800 mb-2">Ujian Selesai!</h2>
+          <p className="text-slate-500 mb-8">Terima kasih {loginData.name}, jawabanmu telah berhasil dikirim ke server.</p>
+          
+          <div className="bg-slate-50 rounded-2xl p-6 mb-8">
+            <p className="text-sm text-slate-400 uppercase font-bold tracking-widest mb-1">Skor Kamu</p>
+            <p className="text-6xl font-black text-blue-600">{examState.score}</p>
+          </div>
+
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full py-4 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition-colors"
+          >
+            Selesai & Keluar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentStep === 'dashboard') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <header className="bg-white border-b p-4 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="bg-slate-800 text-white p-2 rounded-lg"><ShieldCheck size={20}/></div>
+            <h1 className="text-xl font-bold text-slate-800">Guru Dashboard (Real-time)</h1>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-slate-50 text-slate-600"
+          >
+            <LogOut size={18}/> Logout
+          </button>
+        </header>
+
+        <main className="flex-1 p-6 md:p-10">
+          <div className="max-w-6xl mx-auto">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <p className="text-sm text-slate-400 font-bold mb-1">TOTAL PESERTA</p>
+                <p className="text-3xl font-black text-slate-800">{submissions.length}</p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <p className="text-sm text-slate-400 font-bold mb-1">RATA-RATA SKOR</p>
+                <p className="text-3xl font-black text-blue-600">
+                  {submissions.length ? (submissions.reduce((a, b) => a + b.score, 0) / submissions.length).toFixed(1) : 0}
+                </p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <p className="text-sm text-slate-400 font-bold mb-1">STATUS</p>
+                <div className="flex items-center gap-2 text-green-600">
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                  <span className="font-bold">LIVE MONITORING</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 border-b">
+                  <tr>
+                    <th className="px-6 py-4 text-sm font-bold text-slate-500">PESERTA</th>
+                    <th className="px-6 py-4 text-sm font-bold text-slate-500">KELAS</th>
+                    <th className="px-6 py-4 text-sm font-bold text-slate-500">WAKTU SELESAI</th>
+                    <th className="px-6 py-4 text-sm font-bold text-slate-500">SKOR</th>
+                    <th className="px-6 py-4 text-sm font-bold text-slate-500">STATUS</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {submissions.sort((a,b) => new Date(b.submittedAt) - new Date(a.submittedAt)).map((sub) => (
+                    <tr key={sub.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4 font-bold text-slate-800 uppercase">{sub.name}</td>
+                      <td className="px-6 py-4 text-slate-600">{sub.class}</td>
+                      <td className="px-6 py-4 text-slate-500 text-sm">
+                        {new Date(sub.submittedAt).toLocaleTimeString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+                          sub.score >= 70 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                          {sub.score} / 100
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="flex items-center gap-2 text-xs text-slate-400 font-medium">
+                          <CheckCircle2 size={14} className="text-green-500"/> Submitted
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {submissions.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="px-6 py-10 text-center text-slate-400">Belum ada peserta yang mengumpulkan jawaban.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return null;
+}
